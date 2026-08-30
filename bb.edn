@@ -1,0 +1,21 @@
+{:paths ["src" "dev"]
+ :tasks
+ {:requires ([babashka.postgres.dev :as dev])
+  test:bb {:doc "Run the tests. Needs a bb with babashka.ffi and libpq. Uses the
+             server in PG_TEST_CONNINFO, or starts a temporary one with
+             the postgres binaries on the PATH."
+        :extra-paths ["test"]
+        :extra-deps {io.github.cognitect-labs/test-runner
+                     {:git/tag "v0.5.1"
+                      :git/sha "dfb30dd6605cb6c0efc275e1df1736f6e90d4d73"}}
+        :task (dev/with-test-server
+                (fn [conninfo]
+                  (System/setProperty "babashka.postgres.test.conninfo" conninfo)
+                  (exec 'cognitect.test-runner.api/test)))
+        :exec-args {:dirs ["test"]}
+        :org.babashka/cli {:coerce {:nses [:symbol] :vars [:symbol]}}}
+  test:jvm {:doc "Run the tests on the JVM."
+            :task (dev/with-test-server
+                    (fn [conninfo]
+                      (shell {:extra-env {"PG_TEST_CONNINFO" conninfo}}
+                             "clojure -M:test")))}}}

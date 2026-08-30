@@ -1,0 +1,2 @@
+{:hooks {:analyze-call {babashka.postgres/with-conn hooks.babashka.postgres/with-conn}}
+ :lint-as {babashka.postgres/with-transaction clojure.core/locking}}

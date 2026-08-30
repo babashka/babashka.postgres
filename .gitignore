@@ -1,0 +1,6 @@
+.cpcache/
+.clj-kondo/.cache/
+.lsp/
+.nrepl-port
+bb
+bb.exe

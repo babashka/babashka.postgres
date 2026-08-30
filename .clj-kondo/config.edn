@@ -1,0 +1,2 @@
+{:config-paths ["../resources/clj-kondo.exports/babashka/postgres"]
+ :lint-as {babashka.postgres-test/with-table clojure.core/with-open}}
