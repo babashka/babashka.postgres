@@ -17,11 +17,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: ikalnytskyi/action-setup-postgres@v8
+        if: runner.os != 'Windows'
         id: postgres
 
-      - name: Put libpq.dll on the PATH
+      # The Windows runner ships PostgreSQL; the action would download and
+      # extract an installer instead, which takes minutes
+      - name: Start the preinstalled PostgreSQL
         if: runner.os == 'Windows'
-        run: echo "$PGBIN" >> "$GITHUB_PATH"
+        run: |
+          sc.exe config postgresql-x64-14 start= demand
+          net start postgresql-x64-14
+          echo "$PGBIN" >> "$GITHUB_PATH"
 
       - name: Install babashka dev build
         run: |
@@ -29,7 +35,7 @@ jobs:
 
       - name: Run tests
         env:
-          PG_TEST_CONNINFO: ${{ steps.postgres.outputs.connection-uri }}
+          PG_TEST_CONNINFO: ${{ steps.postgres.outputs.connection-uri || 'postgresql://postgres:root@localhost:5432/postgres' }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then bb=./bb.exe; else bb=./bb; fi
           "$bb" test:bb
@@ -48,11 +54,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: ikalnytskyi/action-setup-postgres@v8
+        if: runner.os != 'Windows'
         id: postgres
 
-      - name: Put libpq.dll on the PATH
+      # The Windows runner ships PostgreSQL; the action would download and
+      # extract an installer instead, which takes minutes
+      - name: Start the preinstalled PostgreSQL
         if: runner.os == 'Windows'
-        run: echo "$PGBIN" >> "$GITHUB_PATH"
+        run: |
+          sc.exe config postgresql-x64-14 start= demand
+          net start postgresql-x64-14
+          echo "$PGBIN" >> "$GITHUB_PATH"
 
       - uses: actions/setup-java@v4
         with:
@@ -65,5 +77,5 @@ jobs:
 
       - name: Run tests
         env:
-          PG_TEST_CONNINFO: ${{ steps.postgres.outputs.connection-uri }}
+          PG_TEST_CONNINFO: ${{ steps.postgres.outputs.connection-uri || 'postgresql://postgres:root@localhost:5432/postgres' }}
         run: clojure -M:test
