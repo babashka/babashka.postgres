@@ -275,6 +275,66 @@
       (.appendOffset "+HH:mm:ss" "Z")
       .toFormatter))
 
+(def ^:private array-elem-oid
+  "The element type of each built-in array type."
+  {1000 16, 1001 17, 1002 18, 1003 19, 1005 21, 1007 23, 1009 25, 1014 1042
+   1015 1043, 1016 20, 1021 700, 1022 701, 1028 26, 1231 1700, 2951 2950
+   1182 1082, 1183 1083, 1270 1266, 1115 1114, 1185 1184, 199 114, 3807 3802})
+
+(defn- hex-bytes
+  "Decodes a bytea hex literal, backslash x and hex digits, to a byte array."
+  ^bytes [^String s]
+  (let [n (quot (- (count s) 2) 2)
+        out (byte-array n)]
+    (dotimes [i n]
+      (aset out i (unchecked-byte (Integer/parseInt (subs s (+ 2 (* 2 i)) (+ 4 (* 2 i))) 16))))
+    out))
+
+(defn- parse-array
+  "Parses the text form of an array, such as {1,NULL,\"a b\"}, into nested
+  vectors. decode maps an element string to its value."
+  [^String s decode]
+  (let [n (count s)
+        start (long (if (= \[ (.charAt s 0)) (inc (.indexOf s "=")) 0))
+        parse (fn parse [^long i]
+                ;; i is at the opening brace; returns [value next-index]
+                (loop [i (inc i) acc (transient [])]
+                  (case (.charAt s i)
+                    \} [(persistent! acc) (inc i)]
+                    \, (recur (inc i) acc)
+                    \{ (let [[v j] (parse i)] (recur (long j) (conj! acc v)))
+                    \" (let [sb (StringBuilder.)
+                             j (loop [j (inc i)]
+                                 (case (.charAt s j)
+                                   \" (inc j)
+                                   \\ (do (.append sb (.charAt s (inc j))) (recur (+ j 2)))
+                                   (do (.append sb (.charAt s j)) (recur (inc j)))))]
+                         (recur (long j) (conj! acc (decode (str sb)))))
+                    (let [j (loop [j i]
+                              (if (or (= j n) (#{\, \}} (.charAt s j))) j (recur (inc j))))
+                          tok (subs s i j)]
+                      (recur (long j) (conj! acc (if (= "NULL" tok) nil (decode tok))))))))]
+    (first (parse start))))
+
+(defn- text-decoder
+  "Returns a fn from the text form of a value of type oid to its value.
+  Used for array elements; columns fetch through column-decoder."
+  [oid read-json iso?]
+  (case (long oid)
+    16 (fn [s] (= "t" s))
+    (20 21 23 26) (fn [^String s] (Long/parseLong s))
+    (700 701) (fn [^String s] (Double/parseDouble s))
+    1700 (fn [^String s] (if (= "NaN" s) ##NaN (BigDecimal. s)))
+    17 hex-bytes
+    2950 (fn [^String s] (java.util.UUID/fromString s))
+    (114 3802) (if read-json read-json identity)
+    1082 (if iso? (fn [s] (parse-or-string #(LocalDate/parse %) s)) identity)
+    1083 (if iso? (fn [s] (parse-or-string #(LocalTime/parse %) s)) identity)
+    1266 (if iso? (fn [s] (parse-or-string #(OffsetTime/parse % timetz-format) s)) identity)
+    1114 (if iso? (fn [s] (parse-or-string #(LocalDateTime/parse % timestamp-format) s)) identity)
+    1184 (if iso? (fn [s] (parse-or-string #(OffsetDateTime/parse % timestamptz-format) s)) identity)
+    identity))
+
 (defn- column-decoder
   "Returns a fn of [res row col] that decodes a value of the column type
   oid. Chosen once per column, so a row only calls it."
@@ -296,7 +356,10 @@
     1266 (if iso? (fn [res row col] (parse-or-string #(OffsetTime/parse % timetz-format) (c-getvalue res row col))) c-getvalue)
     1114 (if iso? (fn [res row col] (parse-or-string #(LocalDateTime/parse % timestamp-format) (c-getvalue res row col))) c-getvalue)
     1184 (if iso? (fn [res row col] (parse-or-string #(OffsetDateTime/parse % timestamptz-format) (c-getvalue res row col))) c-getvalue)
-    c-getvalue))
+    (if-let [elem (array-elem-oid (long oid))]
+      (let [decode (text-decoder elem read-json iso?)]
+        (fn [res row col] (parse-array (c-getvalue res row col) decode)))
+      c-getvalue)))
 
 (defn- rows [conn res {:keys [read-json]}]
   (let [iso? (iso-datestyle? conn)
@@ -345,6 +408,41 @@
     :else (throw (ex-info "postgres: set the :write-json option to bind JSON values"
                           {:value v}))))
 
+(defn- hex-literal ^String [^bytes bs]
+  (let [sb (StringBuilder. "\\x")]
+    (dotimes [i (alength bs)]
+      (.append sb (format "%02x" (bit-and 0xff (aget bs i)))))
+    (str sb)))
+
+(defn- array-literal
+  "Encodes vector v as the text form of an array. Elements follow the
+  parameter types; strings are quoted."
+  ^String [write-json v]
+  (let [sb (StringBuilder.)
+        quoted (fn [^String s]
+                 (.append sb \")
+                 (.append sb (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")))
+                 (.append sb \"))
+        emit (fn emit [v]
+               (.append sb \{)
+               (doseq [[i x] (map-indexed vector v)]
+                 (when (pos? i) (.append sb \,))
+                 (cond
+                   (nil? x) (.append sb "NULL")
+                   (vector? x) (emit x)
+                   (boolean? x) (.append sb (if x "t" "f"))
+                   (number? x) (.append sb (str x))
+                   (string? x) (quoted x)
+                   (bytes? x) (quoted (hex-literal x))
+                   (uuid? x) (.append sb (str x))
+                   (instance? java.time.temporal.Temporal x) (quoted (str x))
+                   (instance? JsonParam x) (quoted (json-text write-json (:value x)))
+                   :else (throw (ex-info (str "postgres: cannot bind " (type x) " in an array")
+                                         {:value x}))))
+               (.append sb \}))]
+    (emit v)
+    (str sb)))
+
 (defn- param-spec
   "Returns [oid text-or-bytes binary?] for a parameter value."
   [{:keys [write-json]} v]
@@ -359,7 +457,8 @@
     (uuid? v) [0 (str v) false]
     (instance? java.time.temporal.Temporal v) [0 (str v) false]
     (instance? JsonParam v) [(:oid v) (json-text write-json (:value v)) false]
-    (or (map? v) (vector? v)) [0 (json-text write-json v) false]
+    (vector? v) [0 (array-literal write-json v) false]
+    (map? v) [0 (json-text write-json v) false]
     :else (throw (ex-info (str "postgres: cannot bind " (type v)) {:value v}))))
 
 (defn- exec-params [conn sql params opts]
