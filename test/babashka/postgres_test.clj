@@ -127,6 +127,35 @@
                             (pg/execute! db "copy copy_in from stdin")))
       (is (= [{:one 1}] (pg/query db "select 1 one"))))))
 
+(deftest arrays-test
+  (pg/with-conn [db conninfo]
+    (testing "arrays come back as vectors of decoded elements"
+      (is (= [{:a [1 2 3]}] (pg/query db "select '{1,2,3}'::int8[] a")))
+      (is (= [{:a [1.5 2.5]}] (pg/query db "select '{1.5,2.5}'::float8[] a")))
+      (is (= [{:a ["a b" nil "c,}\"d\\e"]}]
+             (pg/query db "select array['a b', null, 'c,}\"d\\e'] a")))
+      (is (= [{:a [true false nil]}] (pg/query db "select '{t,f,NULL}'::bool[] a")))
+      (is (= [{:a []}] (pg/query db "select '{}'::text[] a")))
+      (is (= [{:a [[1 2] [3 4]]}] (pg/query db "select '{{1,2},{3,4}}'::int[] a"))))
+    (testing "typed elements decode inside arrays"
+      (let [u (random-uuid)]
+        (is (= [{:a [u]}] (pg/query db ["select array[$1::uuid] a" u]))))
+      (is (= [{:a [(LocalDate/parse "2026-08-30")]}]
+             (pg/query db "select '{2026-08-30}'::date[] a")))
+      (is (= [{:a ["{1}" "{2}"]}]
+             (pg/query db ["select $1::text[] a" ["{1}" "{2}"]]))))
+    (testing "a vector parameter is an array"
+      (is (= [{:a [1 2 3]}] (pg/query db ["select $1::int8[] a" [1 2 3]])))
+      (is (= [{:a ["x" nil "y\"z"]}] (pg/query db ["select $1::text[] a" ["x" nil "y\"z"]])))
+      (is (= [{:a [[1 2] [3 4]]}] (pg/query db ["select $1::int[] a" [[1 2] [3 4]]])))
+      (is (= [1 2 3] (vec (first (:a (first (pg/query db ["select $1::bytea[] a" [(byte-array [1 2 3])]]))))))))
+    (testing "an unknown array type stays a string"
+      (pg/execute! db "drop type if exists mood_bbtest")
+      (pg/execute! db "create type mood_bbtest as enum ('ok')")
+      (try
+        (is (= [{:a "{ok}"}] (pg/query db "select '{ok}'::mood_bbtest[] a")))
+        (finally (pg/execute! db "drop type mood_bbtest"))))))
+
 (def json-opts
   {:read-json #(json/parse-string % true)
    :write-json json/generate-string})
@@ -136,8 +165,8 @@
     (let [t (table-name "j")
           doc {:a 1 :nested {:b [1 2 3]} :s "x"}]
       (pg/execute! db (str "create temp table " t " (id int, j json, jb jsonb)"))
-      (testing "maps and vectors bind as json text and json columns decode"
-        (pg/execute! db [(str "insert into " t " values ($1, $2, $3)") 1 doc [1 "two" nil]])
+      (testing "maps bind as json text, a vector needs the json wrapper"
+        (pg/execute! db [(str "insert into " t " values ($1, $2, $3)") 1 doc (pg/jsonb [1 "two" nil])])
         (is (= [{:id 1 :j doc :jb [1 "two" nil]}]
                (pg/query db (str "select * from " t)))))
       (testing "json and jsonb mark a parameter with its type"

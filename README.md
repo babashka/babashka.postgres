@@ -74,7 +74,8 @@ Each result value has the Clojure type for its PostgreSQL column type:
 | `timestamp` | `java.time.LocalDateTime` |
 | `timestamp with time zone` | `java.time.OffsetDateTime` |
 | `json`, `jsonb` | string, or the `:read-json` result |
-| arrays, other types | string |
+| arrays of these types | vector of the element values |
+| other types | string |
 | `NULL` | `nil` |
 
 `connect` sets `DateStyle` to `ISO` when the server default is different.
@@ -86,10 +87,13 @@ strings. A date or time value that `java.time` cannot parse, such as
 already exists, skipping` go to stderr.
 
 Parameters accept longs, doubles, BigDecimals, booleans, strings, byte
-arrays, UUIDs, `java.time` values, `nil`, and with `:write-json`, maps and
-vectors. A string parameter has no declared type, so the server infers the
-type from its use. Add a cast such as `$1::uuid` where the server cannot
-infer one.
+arrays, UUIDs, `java.time` values, `nil`, vectors as arrays, and with
+`:write-json`, maps as JSON. A string parameter has no declared type, so
+the server infers the type from its use. Add a cast such as `$1::uuid`
+where the server cannot infer one.
+
+A vector parameter is an array. Vectors nest for arrays of more than one
+dimension. Wrap a vector in `pg/json` or `pg/jsonb` to send it as JSON.
 
 ### JSON
 
@@ -98,7 +102,7 @@ The library has no JSON dependency. Pass a JSON library through two options:
 - `:read-json` is a function from a JSON string to a value. `query` applies
   it to `json` and `jsonb` columns.
 - `:write-json` is a function from a value to a JSON string. It encodes map
-  and vector parameters.
+  parameters and the values in `pg/json` and `pg/jsonb`.
 
 Use cheshire in babashka, or any library on the JVM:
 
@@ -113,14 +117,17 @@ Use cheshire in babashka, or any library on the JVM:
   (pg/execute! db ["insert into docs values ($1, $2)" 1 {:a 1 :tags ["x" "y"]}])
   (pg/query db "select * from docs"))
 ;;=> [{:id 1, :doc {:a 1, :tags ["x" "y"]}}]
+
+A map parameter encodes as JSON. A vector parameter is an array, not JSON;
+see below.
 ```
 
 The options also go on `connect` and as a third argument to `query` and
 `execute!`. A call option overrides the connection option.
 
-A map or vector parameter has no declared type, so the server infers `json`
-or `jsonb` from the column. Wrap a value in `pg/json` or `pg/jsonb` to
-declare the type, such as for a JSON operator:
+A map parameter has no declared type, so the server infers `json` or
+`jsonb` from the column. Wrap a value in `pg/json` or `pg/jsonb` to declare
+the type, for a vector or for a JSON operator:
 
 ```clojure
 (pg/query db ["select $1->>'a' a" (pg/jsonb {:a 1})] json-opts)
