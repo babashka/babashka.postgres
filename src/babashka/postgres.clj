@@ -65,6 +65,11 @@
 (defcfn ^:private c-server-version "PQserverVersion" [:pointer] :int)
 (defcfn ^:private c-transaction-status "PQtransactionStatus" [:pointer] :int)
 (defcfn ^:private c-parameter-status "PQparameterStatus" [:pointer :string] :string)
+(defcfn ^:private c-host "PQhost" [:pointer] :string)
+(defcfn ^:private c-port "PQport" [:pointer] :string)
+(defcfn ^:private c-user "PQuser" [:pointer] :string)
+(defcfn ^:private c-pass "PQpass" [:pointer] :string)
+(defcfn ^:private c-db "PQdb" [:pointer] :string)
 (defcfn ^:private c-get-result "PQgetResult" [:pointer] :pointer)
 (defcfn ^:private c-put-copy-end "PQputCopyEnd" [:pointer :string] :int)
 (defcfn ^:private c-get-copy-data "PQgetCopyData" [:pointer :pointer :int] :int)
@@ -174,6 +179,14 @@
   `(let [~sym (connect ~conninfo ~opts)]
      (try ~@body
           (finally (close! ~sym)))))
+
+(defn- connection-params
+  "Returns the libpq parameters of an open connection as a map."
+  [{:keys [conn]}]
+  (into {}
+        (filter (fn [[_ v]] (not (str/blank? v))))
+        {:host (c-host conn) :port (c-port conn) :user (c-user conn)
+         :password (c-pass conn) :dbname (c-db conn)}))
 
 (defn server-version
   "Returns the server version of the connection as a string."

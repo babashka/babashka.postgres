@@ -201,17 +201,12 @@
     (is (= [{:answer 42}] (pg/query conninfo "select 42 answer"))))
   (testing "a map of libpq parameters connects"
     (let [db (pg/connect conninfo)
-          m (try
-              (first (pg/query db "select host(inet_server_addr()) host,
-                                          inet_server_port() port,
-                                          current_user \"user\",
-                                          current_database() dbname"))
-              (finally (pg/close! db)))]
+          m (try (#'pg/connection-params db)
+                 (finally (pg/close! db)))]
       (is (= [{:one 1}] (pg/query m "select 1 one")))))
   (testing "connect sets DateStyle to ISO when the server default differs"
     (let [db (pg/connect conninfo)
-          m (try (first (pg/query db "select host(inet_server_addr()) host, inet_server_port() port,
-                                             current_user \"user\", current_database() dbname"))
+          m (try (#'pg/connection-params db)
                  (finally (pg/close! db)))]
       (pg/with-conn [db (assoc m :options "-c DateStyle=German,DMY")]
         (is (= [{:d (LocalDate/parse "2026-08-30")}]
