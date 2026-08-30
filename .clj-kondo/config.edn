@@ -1,2 +1,4 @@
 {:config-paths ["../resources/clj-kondo.exports/babashka/postgres"]
- :lint-as {babashka.postgres-test/with-table clojure.core/with-open}}
+ :lint-as {babashka.postgres-test/with-table clojure.core/with-open}
+ ;; the tests reach it with #'
+ :linters {:unused-private-var {:exclude [babashka.postgres/connection-params]}}}
